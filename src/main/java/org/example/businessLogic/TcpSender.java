@@ -15,26 +15,18 @@ import java.net.Socket;
 public class TcpSender {
     private final Socket socket;
 
-    // Constructeur qui prend un Socket
     public TcpSender(Socket socket) {
         this.socket = socket;
     }
 
-    // Envoie un message
     public void sendMessage(ISOMsg message) {
         try {
             OutputStream out = socket.getOutputStream();
-
-            // Empaquette le message
             byte[] data = message.pack();
 
-            // Affiche le message complet en hexa
             System.out.println("Message ISO brut envoyé (hex) : " + HexUtil.bytesToHex(data));
+            IsoMessagePrinter.printISOMessage(message, data);
 
-            // Affiche le message avec bitmap réelle via IsoMessagePrinter
-            IsoMessagePrinter.printISOMessage(message, data); // ✅ On passe aussi 'data'
-
-            // Envoi des données via TCP
             out.write(data);
             out.flush();
 
@@ -45,13 +37,12 @@ public class TcpSender {
 
     private int getBitmapLength(ISOPackager packager) {
         if (packager instanceof ISO87APackager) {
-            return 8; // Bitmap sur 8 octets (64 bits)
+            return 8;
         }
         return 8;
     }
 
-    // Reçoit un message
-// Reçoit un message
+
     public ISOMsg receiveMessage() {
         try {
             InputStream in = socket.getInputStream();
@@ -59,7 +50,7 @@ public class TcpSender {
             int bytesRead = in.read(buffer);
             if (bytesRead > 0) {
 
-                // --- EXTRACTION DE LA BITMAP ---
+                // bitmap extraction
                 int bitmapLength = getBitmapLength(new ISO87APackager());
                 int bitmapStart = 4; // Skip 4 bytes length header
 
@@ -69,17 +60,14 @@ public class TcpSender {
                     System.out.println("Bitmap reçue (hex) : " + HexUtil.bytesToHex(bitmapBytes));
                 }
 
-                // --- COPIE DES DONNÉES UTILES POUR UNPACK ---
                 byte[] data = new byte[bytesRead];
                 System.arraycopy(buffer, 0, data, 0, bytesRead);
 
-                // --- UNPACK ET AFFICHAGE DU MESSAGE ---
                 ISOMsg response = new ISOMsg();
                 response.setPackager(new ISO87APackager());
-                response.unpack(data); // ✅ Appel valide
+                response.unpack(data);
 
-                // --- AFFICHAGE AVEC IsoMessagePrinter ---
-                IsoMessagePrinter.printISOMessage(response, data); // ✅ Affiche aussi la bitmap
+                IsoMessagePrinter.printISOMessage(response, data);
 
                 return response;
 

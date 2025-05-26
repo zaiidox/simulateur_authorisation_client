@@ -1,43 +1,44 @@
-// src/main/java/org/example/businessLogic/TransactionProcessor.java
 package org.example.businessLogic;
 
 import org.example.network.NetworkManager;
 import org.jpos.iso.ISOMsg;
-import org.example.businessLogic.TransactionValidator;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.net.Socket;
-import java.util.Scanner;
 
 public class TransactionProcessor {
     private final NetworkManager networkManager;
-    private boolean sendToFE1Next = true;
     private final TransactionValidator validator = new TransactionValidator();
+    private final String[] templateFields;
+    private int referenceCounter;  // pour incrémenter la référence
+    private boolean sendToFE1Next = true;
 
-    public TransactionProcessor(NetworkManager networkManager) {
+
+    public TransactionProcessor(NetworkManager networkManager, String csvTemplatePath, int startingReference) throws Exception {
         this.networkManager = networkManager;
+        this.templateFields = loadTemplate(csvTemplatePath);
+        if (templateFields.length < 28) {
+            throw new IllegalArgumentException("Le template CSV doit contenir au moins 28 champs");
+        }
+        this.referenceCounter = startingReference;
     }
 
-    /** Démarre la boucle interactive de saisie et d'envoi des transactions */
-    public void start() {
-        Scanner scanner = new Scanner(System.in);
-        System.out.println("==== CLIENT DE TRANSACTIONS ISO 8583 ====");
+    public void startContinuousSend() {
         while (true) {
-            System.out.print("Tapez 'auth' pour envoyer une demande, ou 'exit' pour quitter: ");
-            String cmd = scanner.nextLine();
-            if ("exit".equalsIgnoreCase(cmd)) break;
-            if (!"auth".equalsIgnoreCase(cmd)) continue;
-
-            // Lecture des champs
-            String[] champs = new String[8];
-            System.out.print("Numéro de carte (champ 2): ");    champs[0] = scanner.nextLine();
-            System.out.print("Code traitement (champ 3): ");   champs[1] = scanner.nextLine();
-            System.out.print("Montant (champ 4, ex: 000000010000): "); champs[2] = scanner.nextLine();
-            System.out.print("Date/Heure (champ 7, MMDDhhmmss): ");   champs[3] = scanner.nextLine();
-            System.out.print("STAN (champ 11): ");              champs[4] = scanner.nextLine();
-            System.out.print("Expiration (champ 14, MMYY): ");  champs[5] = scanner.nextLine();
-            System.out.print("Track2 (champ 35): ");            champs[6] = scanner.nextLine();
-            System.out.print("Référence (champ 37): ");         champs[7] = scanner.nextLine();
-
             try {
+                // Générer la référence incrémentée, formatée sur 12 chiffres par exemple
+                String currentReference = String.format("%012d", referenceCounter++);
+
+                // Copier les champs du template
+                String[] champs = new String[28];
+                System.arraycopy(templateFields, 0, champs, 0, 28);
+
+                // Remplacer la référence (champ 37 ISO, index 7)
+                champs[16] = currentReference;
+
+                // Optionnel : garder STAN fixe, ou à gérer ici si besoin
+
                 ISOMsg msg = IsoMessageBuilder.createAuthRequest(champs);
 
                 if (!validator.validateTransaction(msg)) {
@@ -45,14 +46,8 @@ public class TransactionProcessor {
                     continue;
                 }
 
-                boolean ok;
-                if (sendToFE1Next) {
-                    ok = trySend(msg, "FE1");
-                    if (!ok) ok = trySend(msg, "FE2");
-                } else {
-                    ok = trySend(msg, "FE2");
-                    if (!ok) ok = trySend(msg, "FE1");
-                }
+                boolean ok = sendToFE1Next ? trySend(msg, "FE1") || trySend(msg, "FE2")
+                        : trySend(msg, "FE2") || trySend(msg, "FE1");
 
                 if (ok) {
                     sendToFE1Next = !sendToFE1Next;
@@ -60,9 +55,24 @@ public class TransactionProcessor {
                     System.err.println("Échec de l'envoi à FE1 et FE2.");
                 }
 
+                Thread.sleep(2000);
+
             } catch (Exception e) {
-                System.err.println("Erreur: " + e.getMessage());
+                System.err.println("Erreur : " + e.getMessage());
             }
+        }
+    }
+
+    private String[] loadTemplate(String filePath) throws Exception {
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            reader.readLine(); // ignore header
+            String line = reader.readLine();
+            if (line == null) throw new IllegalArgumentException("Le fichier template est vide.");
+            String[] fields = line.split(",");
+            if (fields.length < 28) {
+                throw new IllegalArgumentException("Le fichier template doit contenir au moins 28 champs.");
+            }
+            return fields;
         }
     }
 
@@ -75,18 +85,14 @@ public class TransactionProcessor {
             }
 
             TcpSender sender = new TcpSender(socket);
-
-            // Envoi du message ISO
             sender.sendMessage(msg);
-            System.out.println(">> Réponse reçue de " + serverName + ":");
-            // Réception de la réponse ISO
             ISOMsg response = sender.receiveMessage();
 
-            // ✅ La méthode s'arrête ici
+            System.out.println(">> Réponse reçue de " + serverName + " pour Référence " + msg.getString(37));
             return response != null;
-
         } catch (Exception e) {
             System.err.println("Erreur envoi à " + serverName + ": " + e.getMessage());
             return false;
         }
-    }}
+    }
+}
